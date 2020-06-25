@@ -5,7 +5,12 @@
 
 -- You should have received a copy of the license along with this
 -- work. If not, see <http://creativecommons.org/licenses/by/4.0/>.
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
+
+import           Test.Hspec
+import           Test.QuickCheck
+import           Test.Hspec.Core.QuickCheck     ( modifyMaxSize )
 
 data Peg = L | C | R deriving (Eq, Show)
 type Disk = Int
@@ -50,7 +55,63 @@ step (origin, destination) conf = push popDisk destination popConf
   popDisk   = fst popResult
   popConf   = snd popResult
 
-cnf :: Conf
-cnf L = [1 .. 5]
-cnf C = []
-cnf R = []
+{-|
+Generates the optimal sequence of movements to complete the game.
+-}
+optStrategy :: Int -> Move -> Conf -> [(Move, Conf)]
+optStrategy disks (source, dest) conf = if disks == 1
+  then [(move, step move conf)]
+  else firstMove ++ secondMove ++ lastMove
+ where
+  move  = (source, dest)
+  spare = if source == L || dest == L
+    then if source == C || dest == C then R else C
+    else L
+  firstMove        = optStrategy (disks - 1) (source, spare) conf
+  confAfterFstMove = snd (last firstMove)
+  secondMove       = [(move, step move confAfterFstMove)]
+  confAfterSndMove = snd (last secondMove)
+  lastMove         = optStrategy (disks - 1) (spare, dest) confAfterSndMove
+
+makeInit :: Int -> Peg -> Conf
+makeInit n p p' | p' == p   = [1..n]
+                | otherwise = []
+
+play :: Int -> Peg -> Peg -> IO()
+play n s t = putStr $ show initConf ++ foldr f v (optStrategy n (s,t) initConf) where
+  initConf  = makeInit n s
+  v         = []
+  f (m,c) r = "\n -> " ++ show m ++ " -> " ++ show c ++ r
+  
+others :: Peg -> (Peg, Peg)
+others L = (R, C)
+others C = (L, R)
+others R = (L, C)
+
+instance {-# OVERLAPPING #-} Arbitrary Move where
+  arbitrary = do
+    s <- frequency [(1, return L), (1, return C), (1, return L)]
+    t <- let (x1, x2) = others s in frequency [(1, return x1), (1, return x2)]
+    return (s, t)
+
+isSorted :: [Disk] -> Bool
+isSorted [] = True
+isSorted [x] = True
+isSorted (x:xs) = x < head xs && isSorted xs
+
+isValid :: [(Move, Conf)] -> Bool
+isValid [] = True
+isValid (x:xs) = isSorted (conf L) && isSorted (conf C) && isSorted (conf R) && isValid xs
+  where conf = snd x
+
+testoptStrategy :: Spec
+testoptStrategy =
+  describe "Optimal strategy for Hanoi Tower:" $ modifyMaxSize (const 10) $ do
+    it "Configuraciones generadas son validas"
+      $
+        property
+      $ \n (s, t) -> 1 <= n ==> isValid (optStrategy n (s, t) (makeInit n s))
+    it "Tamaño de la estrategia optima"
+      $
+        property
+      $ \n (s, t) -> 1 <= n ==> length (optStrategy n (s, t) (makeInit n s)) == 2^n - 1
